@@ -1,0 +1,57 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>html,body{margin:0;background:#f2ead8;overflow:hidden}#v svg{display:block}</style>
+</head><body><div id="v"></div>
+<script src="ink.js"></script><script src="specimen.js"></script><script src="beetle.js"></script>
+<script src="moth.js"></script><script src="dragonfly.js"></script><script src="names.js"></script>
+<script src="paper.js"></script><script src="fonts.js"></script><script src="plate.js"></script>
+<script>
+// frames for make_loop.py: an emperor moth engraved, then hand-coloured, then faded back to paper
+(function () {
+  const I = INK, S = SPEC, PL = PLATE;
+  const W = 120, H = 120, PX = +(new URLSearchParams(location.search).get('px') || 1080);
+  const P = MOTH.genMoth('3', 'emperor');
+  const b = MOTH.boundsMoth(P);
+  const sc = 104 / Math.max(b.w, b.h);
+  const T = I.Tsrt(sc, 0, W / 2 - b.cx * sc, 55 - b.cy * sc);
+  const D = new S.Drawer(T, 'moth' + P.seed, { pitch: 0.42 });
+  MOTH.drawMoth(P, D);
+  const parts = D.parts;
+  // engraving order: every part's contour (its last ink polygon) first, then the hatching
+  const orderA = [], orderB = [];
+  parts.forEach((p, pi) => { const n = p.ink.length; if (n) orderA.push([pi, n - 1]); for (let k = n - 2; k >= 0; k--) orderB.push([pi, k]); });
+  const order = orderA.concat(orderB);
+  const washOrder = [];
+  parts.forEach((p, pi) => p.wash.forEach((w, k) => washOrder.push([pi, k])));
+  const pap = PAPER.paper(W, H, 'loop', { foxing: 6, vig: 0.06, fibres: 220 });
+  const nm = PL.uniqueName(P, new Set());
+  const label = `<text x="${W / 2}" y="111" font-family="FellI" font-size="4.2" text-anchor="middle" fill="${I.hex(S.PAL.ink)}">${I.esc(nm.genus + ' ' + nm.epithet)}, <tspan font-family="FellR" font-size="3.4">Nob.</tspan></text>`;
+  const ease = (t) => t * t * (3 - 2 * t);
+  window.frame = function (t) { // t in [0,1)
+    // timeline as fractions of the loop
+    const e0 = 0.025, e1 = 0.5, c0 = 0.52, c1 = 0.74, f0 = 0.93;
+    const ip = I.clamp((t - e0) / (e1 - e0), 0, 1);
+    const cp = I.clamp((t - c0) / (c1 - c0), 0, 1);
+    const fade = t > f0 ? 1 - ease((t - f0) / (1 - f0)) : 1;
+    const aF = 0.12; // share of the engraving time spent on the outlines
+    const nInk = ip < aF ? Math.floor(orderA.length * ip / aF) : orderA.length + Math.floor(orderB.length * Math.pow((ip - aF) / (1 - aF), 0.85));
+    const nWash = Math.floor(washOrder.length * cp);
+    const keepInk = new Set(order.slice(0, nInk).map((x) => x[0] + ':' + x[1]));
+    const keepWash = new Set(washOrder.slice(0, nWash).map((x) => x[0] + ':' + x[1]));
+    const sub = parts.map((p, pi) => Object.assign({}, p, {
+      ink: p.ink.filter((_, k) => keepInk.has(pi + ':' + k)),
+      wash: p.wash.filter((_, k) => keepWash.has(pi + ':' + k)),
+    }));
+    const e = S.emitParts(sub, { prefix: 'f' });
+    const labelA = I.clamp((cp - 0.6) / 0.4, 0, 1);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${PX}" height="${PX}">` +
+      `<defs><style>${PL.fontCSS()}</style>${pap.defs}${e.defs}</defs><g>${pap.under}</g>` +
+      `<g opacity="${fade.toFixed(3)}"><g style="mix-blend-mode:multiply" filter="url(#fWash)">${e.wash}</g>` +
+      `<g filter="url(#fInk)">${e.ink}</g><g opacity="${labelA.toFixed(3)}">${label}</g></g>` +
+      `<g style="mix-blend-mode:multiply">${pap.tooth}</g></svg>`;
+    document.getElementById('v').innerHTML = svg;
+    return [nInk, order.length, nWash, washOrder.length];
+  };
+  window.ready = true;
+})();
+</script></body></html>

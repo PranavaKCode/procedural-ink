@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Insecta Imaginaria</title>
+<style>
+  :root {
+    --bg: #23201d; --bg2: #2d2925; --fg: #e9e0cc; --dim: #a59a86; --accent: #b4372b;
+    --paper: #f2ead8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: 'FellR', Georgia, 'Times New Roman', serif; overflow: hidden; }
+  #stage { position: absolute; inset: 0 0 64px 0; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at 50% 45%, var(--bg2), var(--bg) 70%); }
+  #frame { position: relative; height: calc(100% - 40px); aspect-ratio: 3 / 4; max-width: calc(100% - 32px);
+    box-shadow: 0 18px 50px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.4); background: var(--paper); cursor: zoom-in; }
+  #frame.zoomed { cursor: grab; }
+  #frame.dragging { cursor: grabbing; }
+  #frame svg { width: 100%; height: 100%; display: block; }
+  #hover { position: absolute; pointer-events: none; border: 1px dashed rgba(180,55,43,.7); border-radius: 3px;
+    display: none; transition: all .08s; }
+  #busy { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); padding: 10px 18px;
+    background: rgba(35,32,29,.86); color: var(--fg); font-style: italic; letter-spacing: .04em; border-radius: 2px;
+    font-size: 15px; pointer-events: none; opacity: 0; transition: opacity .2s; white-space: nowrap; }
+  #busy.on { opacity: 1; }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 64px; display: flex; align-items: center; gap: 10px;
+    padding: 0 18px; background: #1b1916; border-top: 1px solid #3a342e; flex-wrap: nowrap; overflow-x: auto; }
+  #bar .title { font-family: 'FellSC', Georgia, serif; letter-spacing: .14em; font-size: 17px; margin-right: 10px; white-space: nowrap; }
+  button, input { font: inherit; font-size: 14px; color: var(--fg); background: #2c2824; border: 1px solid #4a423a;
+    padding: 7px 12px; border-radius: 2px; cursor: pointer; white-space: nowrap; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff6ec; }
+  input { width: 120px; cursor: text; }
+  #hint { color: var(--dim); font-style: italic; font-size: 13px; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  #preview { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+  @media (max-width: 1100px) { #hint { display: none; } }
+  #tip { position: absolute; pointer-events: none; background: rgba(27,25,22,.92); color: var(--fg); padding: 5px 9px;
+    font-style: italic; font-size: 13px; border-radius: 2px; display: none; white-space: nowrap; }
+  @media (max-width: 720px) {
+    #stage { inset: 0 0 110px 0; }
+    #bar { height: 110px; flex-wrap: wrap; align-content: center; }
+    #hint { display: none; }
+    #frame { height: auto; width: calc(100% - 32px); }
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="frame"><img id="preview" src="hero-preview.jpg" alt="Insecta Imaginaria, Tab. III (printed proof shown while the live plate is engraved)"><div id="hover"></div><div id="busy">engraving&hellip;</div></div>
+</div>
+<div id="tip"></div>
+<div id="bar">
+  <span class="title">Insecta Imaginaria</span>
+  <button id="hero" title="The curated plate (Tab. III)">Tab. III</button>
+  <button id="newplate" class="primary" title="Generate a new plate from a random seed">New plate</button>
+  <input id="seed" spellcheck="false" title="Plate seed — press Enter">
+  <button id="svg" title="Download the plate as SVG">SVG</button>
+  <button id="png" title="Download a 2400 x 3200 PNG">PNG</button>
+  <span id="hint">click a specimen to breed a new one &middot; scroll to zoom &middot; drag to pan &middot; double-click to reset</span>
+</div>
+<script src="js/ink.js"></script>
+<script src="js/specimen.js"></script>
+<script src="js/beetle.js"></script>
+<script src="js/moth.js"></script>
+<script src="js/dragonfly.js"></script>
+<script src="js/names.js"></script>
+<script src="js/paper.js"></script>
+<script src="js/fonts.js"></script>
+<script src="js/plate.js"></script>
+<script src="js/curation.js"></script>
+<script>
+(function () {
+  'use strict';
+  const P = window.PLATE;
+  const frame = document.getElementById('frame');
+  const busy = document.getElementById('busy');
+  const hover = document.getElementById('hover');
+  const tip = document.getElementById('tip');
+  const seedIn = document.getElementById('seed');
+  // embedded fonts for the ui too
+  const st = document.createElement('style'); st.textContent = P.fontCSS(); document.head.appendChild(st);
+
+  let state = null; // {seed, opt, picks, frags, shell}
+  let svgEl = null, vb = [0, 0, P.W, P.H];
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  function setBusy(on, msg) { busy.textContent = msg || 'engraving…'; busy.classList.toggle('on', !!on); }
+
+  function mount(svgText) {
+    frame.querySelectorAll('svg').forEach((n) => n.remove());
+    const pv = document.getElementById('preview'); if (pv) pv.remove(); // the live plate replaces the cached proof
+    frame.insertAdjacentHTML('afterbegin', svgText);
+    svgEl = frame.querySelector('svg');
+    svgEl.removeAttribute('width'); svgEl.removeAttribute('height');
+    svgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    applyVB();
+  }
+  function applyVB() { if (svgEl) svgEl.setAttribute('viewBox', vb.map((v) => +v.toFixed(3)).join(' ')); frame.classList.toggle('zoomed', vb[2] < P.W - 0.01); }
+
+  async function drawPlate(seed, curated, plateNo) {
+    const opt = { curated: curated || null, plateNo: plateNo || null };
+    state = { seed: String(seed), opt, picks: P.choose(String(seed), opt.curated), frags: [], used: new Set() };
+    state.shell = P.shell(state.seed, opt);
+    seedIn.value = state.seed;
+    try { history.replaceState(null, '', '#' + encodeURIComponent(curated ? 'hero' : state.seed)); } catch (e) {}
+    // engrave specimen by specimen; on the first visit the cached proof stays up until the
+    // live plate is complete
+    if (!curated) { const pv = document.getElementById('preview'); if (pv) pv.remove(); }
+    const proof = !!document.getElementById('preview');
+    for (let i = 0; i < state.picks.length; i++) {
+      setBusy(true, 'engraving fig. ' + (i + 1) + ' of ' + state.picks.length + '…');
+      await sleep(0);
+      state.frags[i] = P.fragment(state.picks[i], i, opt, state.used);
+      if ((!proof && i % 4 === 3) || i === state.picks.length - 1) mount(P.assemble(state.shell, state.frags, opt));
+      await sleep(0);
+    }
+    setBusy(false);
+  }
+
+  async function reseedSlot(i) {
+    if (!state) return;
+    const slot = P.LAYOUT[i];
+    const kinds = slot.kinds;
+    const s = Math.random().toString(36).slice(2, 8);
+    const arch = kinds[Math.floor(Math.random() * kinds.length)];
+    const fam = P.FAMS()[slot.fam];
+    state.picks[i] = { slot, fam: slot.fam, P: fam.gen(s, arch) };
+    // a new specimen breaks a male and female pair: the partner gets its own name and scale
+    const j = P.PAIRS[i];
+    const before = j != null && state.picks[j] ? [state.picks[j].idem, state.picks[j].scFix] : null;
+    P.linkPairs(state.picks);
+    setBusy(true, 'breeding fig. ' + (i + 1) + '…');
+    await sleep(0);
+    const redo = [i];
+    if (before && (before[0] != null || before[1] != null)) redo.push(j);
+    for (const k of redo) {
+      const used = new Set();
+      state.frags.forEach((f, q) => { if (f && !redo.includes(q) && f.name.idem == null) { used.add('g:' + f.name.genus); used.add('e:' + f.name.epithet.replace(/(us|a|um|is|e)$/, '')); used.add('s:' + f.name.stem); } });
+      state.frags[k] = P.fragment(state.picks[k], k, state.opt, used);
+    }
+    mount(P.assemble(state.shell, state.frags, state.opt));
+    setBusy(false);
+  }
+
+  // coordinates
+  function toPlate(ev) {
+    const r = svgEl.getBoundingClientRect();
+    // the frame keeps 3:4, so the svg fills it
+    const x = vb[0] + (ev.clientX - r.left) / r.width * vb[2];
+    const y = vb[1] + (ev.clientY - r.top) / r.height * vb[3];
+    return [x, y];
+  }
+  function slotAt(p) {
+    for (let i = 0; i < P.LAYOUT.length; i++) {
+      const s = P.LAYOUT[i];
+      if (Math.abs(p[0] - s.x) < s.w / 2 && Math.abs(p[1] - s.y) < s.h / 2) return i;
+    }
+    return -1;
+  }
+  function showHover(i, ev) {
+    if (i < 0 || !svgEl) { hover.style.display = 'none'; tip.style.display = 'none'; return; }
+    const s = P.LAYOUT[i];
+    const r = svgEl.getBoundingClientRect(), fr = frame.getBoundingClientRect();
+    const sx = r.width / vb[2], sy = r.height / vb[3];
+    hover.style.display = 'block';
+    hover.style.left = (r.left - fr.left + (s.x - s.w / 2 - vb[0]) * sx) + 'px';
+    hover.style.top = (r.top - fr.top + (s.y - s.h / 2 - vb[1]) * sy) + 'px';
+    hover.style.width = (s.w * sx) + 'px';
+    hover.style.height = (s.h * sy) + 'px';
+    const f = state && state.frags[i];
+    if (f) {
+      tip.style.display = 'block';
+      const nm = f.name.idem != null && state.frags[f.name.idem] ? state.frags[f.name.idem].name : f.name;
+      const sx = f.name.sex === 'm' ? ' ♂' : f.name.sex === 'f' ? ' ♀' : '';
+      tip.textContent = (i + 1) + '. ' + nm.genus + ' ' + nm.epithet + sx + ' — click to breed anew';
+      tip.style.left = Math.min(window.innerWidth - tip.offsetWidth - 8, ev.clientX + 14) + 'px';
+      tip.style.top = (ev.clientY + 16) + 'px';
+    }
+  }
+
+  // zoom and pan
+  let drag = null, moved = false;
+  frame.addEventListener('wheel', (ev) => {
+    if (!svgEl) return;
+    ev.preventDefault();
+    const p = toPlate(ev);
+    const k = Math.exp(ev.deltaY * 0.0015);
+    let w = Math.min(P.W, Math.max(P.W / 24, vb[2] * k));
+    const h = w * P.H / P.W;
+    const fx = (p[0] - vb[0]) / vb[2], fy = (p[1] - vb[1]) / vb[3];
+    vb = [p[0] - fx * w, p[1] - fy * h, w, h];
+    clampVB(); applyVB(); showHover(-1);
+  }, { passive: false });
+  function clampVB() {
+    vb[0] = Math.min(P.W - vb[2], Math.max(0, vb[0]));
+    vb[1] = Math.min(P.H - vb[3], Math.max(0, vb[1]));
+  }
+  frame.addEventListener('pointerdown', (ev) => { drag = { x: ev.clientX, y: ev.clientY, vb: vb.slice() }; moved = false; frame.setPointerCapture(ev.pointerId); });
+  frame.addEventListener('pointermove', (ev) => {
+    if (drag) {
+      const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+      if (moved && vb[2] < P.W - 0.01) {
+        frame.classList.add('dragging');
+        const r = svgEl.getBoundingClientRect();
+        vb[0] = drag.vb[0] - dx / r.width * vb[2];
+        vb[1] = drag.vb[1] - dy / r.height * vb[3];
+        clampVB(); applyVB();
+      }
+      showHover(-1);
+      return;
+    }
+    if (!svgEl) return;
+    showHover(slotAt(toPlate(ev)), ev);
+  });
+  frame.addEventListener('pointerup', (ev) => {
+    frame.classList.remove('dragging');
+    const wasDrag = moved; drag = null;
+    if (wasDrag || !svgEl) return;
+    const i = slotAt(toPlate(ev));
+    if (i >= 0) { showHover(-1); reseedSlot(i); }
+  });
+  frame.addEventListener('pointerleave', () => showHover(-1));
+  frame.addEventListener('dblclick', () => { vb = [0, 0, P.W, P.H]; applyVB(); });
+
+  // controls
+  document.getElementById('hero').onclick = () => { vb = [0, 0, P.W, P.H]; drawPlate(CURATED.plateSeed, CURATED.picks, CURATED.plateNo); };
+  document.getElementById('newplate').onclick = () => { vb = [0, 0, P.W, P.H]; drawPlate(String(Math.floor(Math.random() * 1e6))); };
+  seedIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { vb = [0, 0, P.W, P.H]; drawPlate(seedIn.value.trim() || '1'); } });
+  function currentSVG() { return P.assemble(state.shell, state.frags, Object.assign({}, state.opt, { px: 2400 })); }
+  function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
+  document.getElementById('svg').onclick = () => { if (state) download(new Blob([currentSVG()], { type: 'image/svg+xml' }), 'insecta-imaginaria-' + state.seed + '.svg'); };
+  document.getElementById('png').onclick = async () => {
+    if (!state) return;
+    setBusy(true, 'printing…'); await sleep(30);
+    const url = URL.createObjectURL(new Blob([currentSVG()], { type: 'image/svg+xml' }));
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas'); c.width = 2400; c.height = 3200;
+      c.getContext('2d').drawImage(img, 0, 0, 2400, 3200);
+      c.toBlob((b) => { download(b, 'insecta-imaginaria-' + state.seed + '.png'); setBusy(false); URL.revokeObjectURL(url); }, 'image/png');
+    };
+    img.onerror = () => { setBusy(false); };
+    img.src = url;
+  };
+
+  const h = decodeURIComponent((location.hash || '').slice(1));
+  if (h && h !== 'hero') drawPlate(h); else drawPlate(CURATED.plateSeed, CURATED.picks, CURATED.plateNo);
+})();
+</script>
+</body>
+</html>

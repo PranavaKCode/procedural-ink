@@ -1,0 +1,9 @@
+work/
+final/
+logs/
+node_modules/
+__pycache__/
+*.svg
+*.png
+*.jpg
+*.mp4
